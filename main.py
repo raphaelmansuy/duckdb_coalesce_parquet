@@ -4,7 +4,6 @@
 import duckdb
 import argparse
 import logging
-import duckdb
 import os
 import tempfile
 import glob
@@ -15,6 +14,9 @@ showTime = False
 
 # time the execution of a function
 def timeit(func):
+    """ 
+    Decorator to time a function
+    """ 
     def timed(*args, **kw):
         ts = time.time()
         result = func(*args, **kw)
@@ -27,22 +29,57 @@ def timeit(func):
 
 
 
-
 # create a database from a path with duckdb
 @timeit
 def create_database(path):
+    """ 
+    Create a database from a path
+
+    Parameters: 
+
+    path (str): path to the database
+
+    """
     db = duckdb.connect(path)
     return db
 
 # create a table ingest from a list of parquet files from a path
 @timeit
 def create_table(db, table_name: str, paths: [str]):
+    """ 
+    Create a table from a list of parquet files
+
+    Parameters:
+
+    db (duckdb): database connection
+    table_name (str): name of the table
+    paths ([str]): list of paths to the parquet files
+
+    Example:
+
+    create_table(db, "test", ["test.parquet"])
+
+    """
     paths_list = ",".join([f"'{path}'" for path in paths])
     db.execute(
         f"CREATE TABLE {table_name} AS SELECT * FROM parquet_scan([{paths_list}]);")
 
 # import the parquet files into a database one by one
 def create_table_with_append(db, table_name: str, paths: [str]):
+    """ 
+    Create a table from a list of parquet files
+
+    Parameters:
+
+    db (duckdb): database connection
+    table_name (str): name of the table
+    paths ([str]): list of paths to the parquet files
+
+    Example:
+
+    create_table_with_append(db, "test", ["test.parquet"])
+
+    """
     total = len(paths)
     for index,path in enumerate(paths):
         # if it's the first file, create the table
@@ -57,12 +94,39 @@ def create_table_with_append(db, table_name: str, paths: [str]):
 # export a table as a parquet file to a path
 @timeit
 def export_table(db, table_name, path):
+    """
+    Export a table as a parquet file to a path
+
+    Parameters:
+
+    db (duckdb): database connection
+    table_name (str): name of the table
+    path (str): path to the parquet file
+
+    Example:
+
+    export_table(db, "test", "test.parquet")
+
+    """
     db.execute(f"COPY (SELECT * FROM {table_name}) TO '{path}' (FORMAT PARQUET,CODEC 'SNAPPY');")
 
 
 # diplays statistics about the parquet file
 @timeit
 def display_parquet_stats(db,path):
+    """ 
+    Displays statistics about the parquet file
+
+    Parameters:
+
+    db (duckdb): database connection
+    path (str): path to the parquet file
+
+    Example:
+
+    display_parquet_stats(db, "test.parquet")
+
+    """
     print(f"Displaying statistics about {path}")
     df = db.execute(f"SELECT count(file_name) as number_files,sum(total_compressed_size)/1024 as sum_compressed,sum(total_uncompressed_size)/1024 as sum_uncompressed FROM parquet_metadata('{path}');").fetchdf()
     # display the dataframe df
@@ -71,6 +135,21 @@ def display_parquet_stats(db,path):
 # get a list of files from a path using a glob utility
 @timeit
 def get_files(path: str) -> [str]: 
+    """
+    Get a list of files from a path using a glob utility
+
+    Parameters:
+
+    path (str): path to the files
+
+    Example:
+
+    get_files("/path/to/files/*")
+
+    Returns:
+
+    [str]: list of files
+    """
     files = glob.glob(path)
     # get an array of string from the list of files
     filesArray = [str(file) for file in files]
@@ -79,6 +158,22 @@ def get_files(path: str) -> [str]:
 # calculate the sum of size of a list of files
 @timeit
 def get_size(files):
+    """
+    Calculate the sum of size of a list of files
+
+    Parameters:
+
+    files ([str]): list of files
+
+    Example:
+
+    get_size(["test.parquet"])
+
+    Returns:
+    
+    int: size of the list of files in bytes
+
+    """
     size = 0
     for file in files:
         size += os.path.getsize(file)
@@ -87,21 +182,86 @@ def get_size(files):
 # get number of lines in table 
 @timeit
 def get_number_lines(db, table_name: str) -> int:
+    """
+    Get number of lines in table
+
+    Parameters:
+
+    db (duckdb): database connection
+    table_name (str): name of the table
+
+    Example:
+
+    get_number_lines(db, "test")
+
+    Returns:
+
+    int: number of lines in the table
+
+    """
     return db.execute(f"SELECT count(*) FROM {table_name};").fetchdf().values[0][0]
 
 # im#port the parquet files from a path
 @timeit
 def append_parquet_file_to_table(db, table_name: str, path: str):
+    """
+    Import the parquet files from a path
+
+    Parameters:
+
+    db (duckdb): database connection
+    table_name (str): name of the table
+    path (str): path to the parquet file
+
+    Example:
+
+    append_parquet_file_to_table(db, "test", "test.parquet")
+
+    """
     db.execute(f"INSERT INTO {table_name} SELECT * FROM parquet_scan('{path}');")
     
 # export a parquet file from a database and table from line i to line j = i + size
 @timeit
 def export_table_from_to(db, table_name: str, path: str, offset: int, number_lines: int):
+    """
+    Export a parquet file from a database and table from line i to line j = i + size
+
+    Parameters:
+
+    db (duckdb): database connection
+    table_name (str): name of the table
+    path (str): path to the parquet file
+    offset (int): line i
+    number_lines (int): number of lines to export
+
+    Example:
+
+    export_table_from_to(db, "test", "test.parquet", 0, 100)
+
+    """
     db.execute(f"COPY (SELECT * FROM {table_name} LIMIT {number_lines} OFFSET {offset}) TO '{path}' (FORMAT PARQUET,CODEC 'SNAPPY');")
 
 # calculate the number of line to export from the total size and the total of lines to export 128M by file  
 @timeit
 def calculate_number_lines(total_size_in_bytes : int, total_lines: int, size_by_file_in_mb: int) -> int:
+    """
+    Calculate the number of line to export from the total size and the total of lines to export 128M by file
+
+    Parameters:
+
+    total_size_in_bytes (int): total size in bytes
+    total_lines (int): total number of lines
+    size_by_file_in_mb (int): size by file in MB
+
+    Example:
+
+    calculate_number_lines(1000000000, 100000000, 128)
+
+    Returns:
+
+    int: number of lines to export
+
+    """
     size_by_line_in_byte = total_size_in_bytes / total_lines
     size_by_file_in_byte = size_by_file_in_mb * 1024 * 1024
     number_lines = size_by_file_in_byte / size_by_line_in_byte
@@ -110,6 +270,22 @@ def calculate_number_lines(total_size_in_bytes : int, total_lines: int, size_by_
 # export a parquet file from a database and table from line i to line j = i + size
 @timeit
 def export_table(db, table_name: str,dest_path: str, total_lines: int, number_of_lines_by_file: int):
+    """
+    Export a parquet file from a database and table from line i to line j = i + size
+
+    Parameters:
+
+    db (duckdb): database connection
+    table_name (str): name of the table
+    dest_path (str): path to the parquet file
+    total_lines (int): total number of lines
+    number_of_lines_by_file (int): number of lines to export
+
+    Example:
+
+    export_table(db, "test", "test.parquet", 100000000, 1000000)
+
+    """
     ensure_dir(dest_path)
     gen_range = range(0, total_lines, number_of_lines_by_file)
     len_range = len(gen_range)
@@ -222,7 +398,7 @@ def main():
         print(f"Exporting table to {args.destinationPath}")
         export_table(db, "ingest", args.destinationPath, number_lines, number_lines_to_export)
         db.close()
-        print("Done")
+        print(" ✅ Done ! 🚀")
 
 
 if __name__ == "__main__":
