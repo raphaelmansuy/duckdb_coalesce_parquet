@@ -1,0 +1,1 @@
+# duckdb_coalesce_parquet
