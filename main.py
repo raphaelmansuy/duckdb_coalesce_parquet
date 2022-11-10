@@ -9,24 +9,59 @@ import os
 import tempfile
 import glob
 import shutil
+import time
+
+showTime = False
+
+# time the execution of a function
+def timeit(func):
+    def timed(*args, **kw):
+        ts = time.time()
+        result = func(*args, **kw)
+        te = time.time()
+        if showTime:
+            print('func:%r took: %2.4f sec' % \
+                  (func.__name__, te-ts))
+        return result
+    return timed
+
+
+
 
 # create a database from a path with duckdb
+@timeit
 def create_database(path):
     db = duckdb.connect(path)
     return db
 
 # create a table ingest from a list of parquet files from a path
-def create_table(db, table_name: str, paths):
+@timeit
+def create_table(db, table_name: str, paths: [str]):
     paths_list = ",".join([f"'{path}'" for path in paths])
     db.execute(
         f"CREATE TABLE {table_name} AS SELECT * FROM parquet_scan([{paths_list}]);")
 
+# import the parquet files into a database one by one
+def create_table_with_append(db, table_name: str, paths: [str]):
+    total = len(paths)
+    for index,path in enumerate(paths):
+        # if it's the first file, create the table
+        if index == 0:
+            print(f"Creating table {table_name} from {path}")
+            create_table(db, table_name, [path])
+        else:
+            progress = f"{index+1}/{total}"
+            print(f"$[{progress}] - Appending {path} to table {table_name}")
+            append_parquet_file_to_table(db, table_name, path)
+
 # export a table as a parquet file to a path
+@timeit
 def export_table(db, table_name, path):
     db.execute(f"COPY (SELECT * FROM {table_name}) TO '{path}' (FORMAT PARQUET,CODEC 'SNAPPY');")
 
 
 # diplays statistics about the parquet file
+@timeit
 def display_parquet_stats(db,path):
     print(f"Displaying statistics about {path}")
     df = db.execute(f"SELECT count(file_name) as number_files,sum(total_compressed_size)/1024 as sum_compressed,sum(total_uncompressed_size)/1024 as sum_uncompressed FROM parquet_metadata('{path}');").fetchdf()
@@ -34,6 +69,7 @@ def display_parquet_stats(db,path):
     print(df)
 
 # get a list of files from a path using a glob utility
+@timeit
 def get_files(path: str) -> [str]: 
     files = glob.glob(path)
     # get an array of string from the list of files
@@ -41,6 +77,7 @@ def get_files(path: str) -> [str]:
     return filesArray
 
 # calculate the sum of size of a list of files
+@timeit
 def get_size(files):
     size = 0
     for file in files:
@@ -48,14 +85,22 @@ def get_size(files):
     return size
 
 # get number of lines in table 
+@timeit
 def get_number_lines(db, table_name: str) -> int:
     return db.execute(f"SELECT count(*) FROM {table_name};").fetchdf().values[0][0]
 
+# im#port the parquet files from a path
+@timeit
+def append_parquet_file_to_table(db, table_name: str, path: str):
+    db.execute(f"INSERT INTO {table_name} SELECT * FROM parquet_scan('{path}');")
+    
 # export a parquet file from a database and table from line i to line j = i + size
+@timeit
 def export_table_from_to(db, table_name: str, path: str, offset: int, number_lines: int):
     db.execute(f"COPY (SELECT * FROM {table_name} LIMIT {number_lines} OFFSET {offset}) TO '{path}' (FORMAT PARQUET,CODEC 'SNAPPY');")
 
 # calculate the number of line to export from the total size and the total of lines to export 128M by file  
+@timeit
 def calculate_number_lines(total_size_in_bytes : int, total_lines: int, size_by_file_in_mb: int) -> int:
     size_by_line_in_byte = total_size_in_bytes / total_lines
     size_by_file_in_byte = size_by_file_in_mb * 1024 * 1024
@@ -63,10 +108,17 @@ def calculate_number_lines(total_size_in_bytes : int, total_lines: int, size_by_
     return int(number_lines)
 
 # export a parquet file from a database and table from line i to line j = i + size
+@timeit
 def export_table(db, table_name: str,dest_path: str, total_lines: int, number_of_lines_by_file: int):
     ensure_dir(dest_path)
-    for i in range(0, total_lines, number_of_lines_by_file):
-        path = f"{dest_path}/{i}_{i+number_of_lines_by_file}.parquet"
+    gen_range = range(0, total_lines, number_of_lines_by_file)
+    len_range = len(gen_range)
+    i = 0
+    for index in gen_range:
+        progress = f"{i+1}/{len_range}"
+        i += 1
+        path = f"{dest_path}/{1}_{index}_{index+number_of_lines_by_file}.parquet"
+        print(f"$[{progress}] - Exporting {path}")
         export_table_from_to(db, table_name, path, i, number_of_lines_by_file)
 
 # get the database size in bytes
@@ -94,9 +146,11 @@ def clean_dir(path):
 # check if file exists in directory
 def file_exists_in_directory(path):
     # list all files in the directory
-    files = os.listdir(path)
-    if len(files) > 0:
-        return True
+    if os.path.exists(path):
+        files = os.listdir(path)
+        return len(files) > 0
+    return False
+
 
 # Python CLI main function
 def main():
@@ -112,10 +166,16 @@ def main():
     # optional argument size by file in MB (default 128)
     parser.add_argument('--size', type=int, default=128, help='The size of the parquet files in MB (default 128). Example --size 128')
     # optional argument to clean the destination path (default False)
-    parser.add_argument('--clean', type=bool, default=False, help='Clean the destination path before exporting the parquet files. Default False. Example --clean True')
+    parser.add_argument('--clean', type=bool, default=False, help='Clean the destination path before exporting the parquet files. Default False. Example --clean True') 
+    # optional agurment to diplay the time of execution (default False)
+    parser.add_argument('--time', type=bool, default=False, help='Display the time of execution. Default False. Example --time True')
+
 
     args = parser.parse_args()
     print(args.sourcePath, args.destinationPath, args.size)
+
+    # set the time flag
+    showTime = args.time
 
     # get list of files from the source path
     files = get_files(args.sourcePath)
@@ -132,27 +192,28 @@ def main():
         print(f"Destination path ${args.destinationPath} already exists and --clean option is false. Exiting.")
         return 1
 
+    # calculate the size of the files
+    size = get_size(files)
+    sizeInMB = size / 1024 / 1024
+    print(f"size of the files: {sizeInMB} MB")
+    print(f"size of the files: {size} bytes")
+
     with tempfile.TemporaryDirectory() as tmpdirname:
         print(f"Created temporary directory {tmpdirname}")
         # create a database from a path
         database_ingest_path = os.path.join(tmpdirname, 'ingest_database.db')
         print(f"creating database from database_ingest_path: {database_ingest_path}")
-
-        # calculate the size of the files
-        size = get_size(files)
-        sizeInMB = size / 1024 / 1024
-        print(f"size of the files: {sizeInMB} MB")
-        print(f"size of the files: {size} bytes")
         # create a database from a path
         db = create_database(database_ingest_path) 
         # create a table ingest from a list of parquet files from a path
         print(f"Creating table from {args.sourcePath}")
-        create_table(db, "ingest", files)
+        create_table_with_append(db, "ingest", files)
          # display the number of lines in the ingest table 
         number_lines = get_number_lines(db, "ingest")
         print(f"number of lines in the ingest table: {number_lines}")
         # calculate the number of lines to export from the total size and the total of lines to export 128M by file
         database_size = get_database_size(db)
+        # print the database size
         print(f"database size: {database_size}")
         number_lines_to_export = calculate_number_lines(database_size, number_lines, int(args.size))
         # display the number of lines to export
